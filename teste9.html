@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Gerador de Cobrança</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f4f4; padding: 20px; }
+    label { display: block; margin-top: 10px; font-weight: bold; }
+    input, select, textarea, button {
+      width: 100%; padding: 8px; margin-top: 5px;
+      border: 1px solid #ccc; border-radius: 4px;
+      box-sizing: border-box;
+    }
+    button {
+      background: #28a745; color: white; border: none; cursor: pointer; margin-top: 10px;
+      transition: background-color 0.3s ease;
+    }
+    button:hover { background: #218838; }
+    .output, .historico { margin-top: 20px; }
+    table {
+      width: 100%; border-collapse: collapse; margin-top: 10px; background: white;
+    }
+    th, td {
+      border: 1px solid #ccc; padding: 8px; text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eee; }
+    .acoes button {
+      margin: 3px 5px 3px 0; padding: 5px 10px;
+      width: auto;
+      font-size: 14px;
+    }
+    .btn-parcela-whatsapp {
+      background:#128C7E; 
+      color:#fff; 
+      border:none; 
+      padding:2px 6px; 
+      margin-left:6px; 
+      border-radius:4px; 
+      cursor:pointer;
+      font-size: 14px;
+    }
+    .btn-apagar {
+      background:#dc3545 !important;
+    }
+    #btnApagarAtual {
+      background: #dc3545;
+      color: white;
+      border: none;
+      padding: 10px;
+      margin-top: 10px;
+      cursor: pointer;
+      width: 100%;
+      font-weight: bold;
+    }
+    #btnApagarAtual:hover {
+      background: #b02a37;
+    }
+  </style>
+</head>
+<body>
+
+<h2>Gerador de Cobrança</h2>
+
+<label for="nome">Nome do Cliente:</label>
+<input type="text" id="nome" />
+
+<label for="valor">Valor Total (R$):</label>
+<input type="number" id="valor" step="0.01" min="0" />
+
+<label for="tipo">Tipo de Pagamento:</label>
+<select id="tipo" onchange="ajustarPrazos()">
+  <option value="à vista">À vista</option>
+  <option value="a prazo">A prazo</option>
+</select>
+
+<label for="dataBase">Data Base (início dos prazos):</label>
+<input type="date" id="dataBase" />
+
+<label for="prazos">Prazos (dias separados por vírgula):</label>
+<input type="text" id="prazos" placeholder="Ex: 30,60,90" />
+
+<button onclick="gerarCobranca()">Gerar Cobrança</button>
+
+<div class="output" id="resultado" style="display:none;">
+  <label for="mensagem">Mensagem:</label>
+  <textarea id="mensagem" rows="6" readonly></textarea>
+  
+  <button onclick="copiarTexto()">📋 Copiar</button>
+  <button onclick="abrirWhatsappGeral()" style="background:#25d366; color:#fff; border:none; padding:10px; margin-top:10px; cursor:pointer;">
+    📱 WhatsApp Geral
+  </button>
+  
+  <button onclick="salvarCobranca()">💾 Salvar</button>
+  <button id="btnApagarAtual" onclick="apagarAtual()">🧹 Apagar Cotação Atual</button>
+</div>
+
+<div class="historico">
+  <h3>Cobranças Salvas</h3>
+  <label for="filtroMes">Filtrar por mês de vencimento:</label>
+  <select id="filtroMes" onchange="mostrarCobrancas()">
+    <option value="todos">Todos os meses</option>
+  </select>
+  <div id="listaCobrancas"></div>
+</div>
+
+<script>
+let ultimaCobranca = null;
+const nomesMeses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+function ajustarPrazos() {
+  const tipo = document.getElementById("tipo").value;
+  const prazos = document.getElementById("prazos");
+  prazos.disabled = tipo === "à vista";
+  prazos.placeholder = tipo === "à vista" ? "Pagamento à vista, sem prazos." : "Ex: 30,60,90";
+  if (tipo === "à vista") prazos.value = "";
+}
+
+function formatarValorBR(valor) {
+  return Number(valor).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function ajustarParaDiaUtil(data) {
+  while (data.getDay() === 0 || data.getDay() === 6) {
+    data.setDate(data.getDate() + 1);
+  }
+  return data;
+}
+
+function gerarCobranca() {
+  const nome = document.getElementById("nome").value.trim();
+  const valor = parseFloat(document.getElementById("valor").value);
+  const tipo = document.getElementById("tipo").value;
+  const prazosRaw = document.getElementById("prazos").value;
+  const dataBaseInput = document.getElementById("dataBase").value;
+  const hoje = dataBaseInput ? new Date(dataBaseInput + "T00:00:00") : new Date();
+
+  if (!nome || isNaN(valor) || valor <= 0) {
+    alert("Preencha todos os campos corretamente.");
+    return;
+  }
+
+  let parcelas = [];
+
+  if (tipo === "à vista") {
+    const data = ajustarParaDiaUtil(new Date(hoje));
+    parcelas.push({ valor: valor, data: data.toLocaleDateString("pt-BR") });
+  } else {
+    const prazos = prazosRaw.split(',').map(p => parseInt(p.trim())).filter(n => !isNaN(n));
+    if (prazos.length === 0) {
+      alert("Informe prazos válidos.");
+      return;
+    }
+
+    const qtd = prazos.length;
+    const totalCentavos = Math.round(valor * 100);
+    const valorInteiroReais = Math.floor(valor / qtd);
+    const valorInteiroCentavos = valorInteiroReais * 100;
+    const somaParcelasRestantes = valorInteiroCentavos * (qtd - 1);
+    const primeiraParcela = totalCentavos - somaParcelasRestantes;
+
+    for (let i = 0; i < qtd; i++) {
+      const data = ajustarParaDiaUtil(new Date(hoje.getTime() + prazos[i] * 86400000));
+      const valorParcelaCentavos = (i === 0) ? primeiraParcela : valorInteiroCentavos;
+      parcelas.push({
+        valor: valorParcelaCentavos / 100,
+        data: data.toLocaleDateString("pt-BR")
+      });
+    }
+  }
+
+  const mensagem = `Olá ${nome}, tudo bem?\n\nSegue cobrança no valor total de R$ ${formatarValorBR(valor)} (${tipo}), com vencimentos:\n` +
+    parcelas.map((p, i) => `${i + 1}ª Parcela – Vencimento: ${p.data} – Valor: ${formatarValorBR(p.valor)}`).join('\n') +
+    `\n\nQualquer dúvida, fico à disposição!`;
+
+  document.getElementById("mensagem").value = mensagem;
+  ultimaCobranca = { nome, valor, tipo, parcelas };
+
+  document.getElementById("resultado").style.display = "block";
+}
+
+function copiarTexto() {
+  const textarea = document.getElementById("mensagem");
+  textarea.select();
+  document.execCommand("copy");
+  alert("Mensagem copiada!");
+}
+
+function abrirWhatsappGeral() {
+  if (!ultimaCobranca) {
+    alert("Gere uma cobrança primeiro.");
+    return;
+  }
+  const texto = document.getElementById("mensagem").value;
+  const link = `https://wa.me/?text=${encodeURIComponent(texto)}`;
+  window.open(link, '_blank');
+}
+
+function salvarCobranca() {
+  if (!ultimaCobranca) return;
+  const dados = JSON.parse(localStorage.getItem("cobrancas") || "[]");
+  dados.push(ultimaCobranca);
+  localStorage.setItem("cobrancas", JSON.stringify(dados));
+  mostrarCobrancas();
+}
+
+function apagarAtual() {
+  document.getElementById("resultado").style.display = "none";
+  document.getElementById("mensagem").value = "";
+  ultimaCobranca = null;
+
+  // Limpa os campos do formulário também:
+  document.getElementById("nome").value = "";
+  document.getElementById("valor").value = "";
+  document.getElementById("tipo").value = "à vista";
+  document.getElementById("prazos").value = "";
+  document.getElementById("dataBase").value = "";
+
+  ajustarPrazos(); // desabilita o campo prazos se for à vista
+}
+
+function mostrarCobrancas() {
+  const dados = JSON.parse(localStorage.getItem("cobrancas") || "[]");
+  const filtro = document.getElementById("filtroMes").value;
+  const lista = document.getElementById("listaCobrancas");
+  const meses = new Set();
+  let html = `<table><thead><tr><th>Cliente</th><th>Valor</th><th>Tipo</th><th>Parcelas</th><th>Ações</th></tr></thead><tbody>`;
+  let total = 0;
+
+  dados.forEach((c, i) => {
+    const visiveis = c.parcelas.filter(p => {
+      const [d, m, a] = p.data.split("/");
+      const chave = `${m}/${a}`;
+      meses.add(chave);
+      return filtro === "todos" || filtro === chave;
+    });
+    if (visiveis.length > 0) {
+      total++;
+      const linhas = visiveis.map((p, j) => {
+        const msgParcela = `Olá ${c.nome}, tudo bem?\n\nSegue cobrança referente à ${j + 1}ª parcela:\n${j + 1}ª Parcela – Vencimento: ${p.data} – Valor: R$ ${formatarValorBR(p.valor)}\n\nQualquer dúvida, fico à disposição!`;
+        return `${j + 1}ª – ${p.data} – R$ ${formatarValorBR(p.valor)} 
+        <button class="btn-parcela-whatsapp" onclick="abrirWhatsappParcela('${encodeURIComponent(msgParcela)}')">📱</button>`;
+      }).join("<br>");
+
+      const msgCompleta = `Olá ${c.nome}, tudo bem?\n\nSegue cobrança no valor total de R$ ${formatarValorBR(c.valor)} (${c.tipo}), com vencimentos:\n` +
+        visiveis.map((p, j) => `${j + 1}ª – Vencimento: ${p.data} – Valor: ${formatarValorBR(p.valor)}`).join('\n') +
+        `\n\nQualquer dúvida, fico à disposição!`;
+
+      html += `<tr>
+        <td>${c.nome}</td>
+        <td>R$ ${formatarValorBR(c.valor)}</td>
+        <td>${c.tipo}</td>
+        <td>${linhas}</td>
+        <td class="acoes">
+          <button onclick="copiarMensagem(\`${msgCompleta.replace(/`/g, '\\`')}\`)">📋</button>
+          <button onclick="apagarCobranca(${i})" class="btn-apagar">🗑️</button>
+        </td>
+      </tr>`;
+    }
+  });
+
+  html += "</tbody></table>";
+  lista.innerHTML = html + `<p><strong>${total} cobrança(s) encontrada(s).</strong></p>`;
+
+  const select = document.getElementById("filtroMes");
+  const anterior = select.value;
+  select.innerHTML = `<option value="todos">Todos os meses</option>`;
+  [...meses].sort().forEach(m => {
+    const [mm, aa] = m.split("/");
+    const opt = document.createElement("option");
+    opt.value = m;
+    opt.text = `${nomesMeses[parseInt(mm, 10) - 1]}/${aa}`;
+    select.appendChild(opt);
+  });
+  select.value = anterior;
+}
+
+function abrirWhatsappParcela(msgCodificada) {
+  const link = `https://wa.me/?text=${msgCodificada}`;
+  window.open(link, '_blank');
+}
+
+function copiarMensagem(texto) {
+  const temp = document.createElement("textarea");
+  temp.value = texto;
+  document.body.appendChild(temp);
+  temp.select();
+  document.execCommand("copy");
+  document.body.removeChild(temp);
+  alert("Mensagem copiada!");
+}
+
+function apagarCobranca(i) {
+  const dados = JSON.parse(localStorage.getItem("cobrancas") || "[]");
+  dados.splice(i, 1);
+  localStorage.setItem("cobrancas", JSON.stringify(dados));
+  mostrarCobrancas();
+}
+
+window.onload = () => {
+  ajustarPrazos();
+  mostrarCobrancas();
+};
+</script>
+
+</body>
+</html>
